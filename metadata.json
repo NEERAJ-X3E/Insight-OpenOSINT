@@ -1,0 +1,8 @@
+{
+  "name": "OpenOSINT",
+  "description": "AI-powered OSINT investigation framework and intelligence gathering tool suite.",
+  "requestFeedback": false,
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

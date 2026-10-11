@@ -45,11 +45,13 @@ function _colorFor(type) {
 // Module-level state
 // ---------------------------------------------------------------------------
 
-let _cy          = null;
+let _cy            = null;
 let _layoutTimer = null;
 let _nodeCount   = 0;
 let _capFired    = false;
 let _layoutName  = null; // cached after first detection
+const _bufferedNodes = new Map();
+const _bufferedEdges = new Map();
 
 // ---------------------------------------------------------------------------
 // fcose detection — check once after cy is initialised (amendment 4)
@@ -159,12 +161,16 @@ const _STYLESHEET = [
 // ---------------------------------------------------------------------------
 
 export function initGraph(containerEl) {
-  if (_cy) return; // idempotent
+  if (_cy) {
+    resizeGraph();
+    return _cy;
+  }
   const cytoscape = window.cytoscape;
   if (typeof cytoscape !== 'function') {
     console.error('[ECG] window.cytoscape not available — check CDN load order');
-    return;
+    return null;
   }
+  if (!containerEl) return null;
   _cy = cytoscape({
     container: containerEl,
     style:     _STYLESHEET,
@@ -174,6 +180,40 @@ export function initGraph(containerEl) {
     wheelSensitivity: 0.3,
   });
 
+  // Populate any elements buffered before initGraph was called
+  if (_bufferedNodes.size > 0) {
+    const nodesToAdd = [];
+    for (const n of _bufferedNodes.values()) {
+      if (_nodeCount >= MAX_NODES) break;
+      nodesToAdd.push({
+        group: 'nodes',
+        data: {
+          id:     n.id,
+          label:  String(n.label || n.id).slice(0, 48),
+          type:   n.type   || 'unknown',
+          color:  _colorFor(n.type),
+          isRoot: !!(n.data?.isRoot),
+          ...n.data,
+        },
+      });
+      _nodeCount++;
+    }
+    if (nodesToAdd.length) _cy.add(nodesToAdd);
+
+    const edgesToAdd = [];
+    for (const e of _bufferedEdges.values()) {
+      if (_cy.getElementById(e.source).length === 0) continue;
+      if (_cy.getElementById(e.target).length === 0) continue;
+      const edgeId = `edge:${e.source}|${e.target}|${e.label || ''}`;
+      edgesToAdd.push({
+        group: 'edges',
+        data: { id: edgeId, source: e.source, target: e.target, label: e.label || '' },
+      });
+    }
+    if (edgesToAdd.length) _cy.add(edgesToAdd);
+    if (nodesToAdd.length || edgesToAdd.length) _scheduleLayout();
+  }
+
   // Pivot on node tap
   _cy.on('tap', 'node', evt => {
     const cb = window._graphPivotCallback;
@@ -181,17 +221,34 @@ export function initGraph(containerEl) {
       cb(evt.target.id(), evt.target.data());
     }
   });
+
+  return _cy;
 }
 
 /**
  * Merge nodes and edges into the graph.
- * Nodes inserted first; edges whose endpoints are absent are skipped silently
- * (amendment 3 — handles out-of-order tool arrivals without Cytoscape errors).
+ * Nodes inserted first; edges whose endpoints are absent are skipped silently.
+ * Buffered so that elements arriving before the graph view is visited are never dropped.
  */
 export function addToGraph({ nodes = [], edges = [] }) {
+  // Always buffer incoming nodes and edges so they survive tab switches & lazy inits
+  for (const n of nodes) {
+    if (n?.id && !_bufferedNodes.has(n.id)) {
+      _bufferedNodes.set(n.id, n);
+    }
+  }
+  for (const e of edges) {
+    if (e?.source && e?.target) {
+      const edgeId = `edge:${e.source}|${e.target}|${e.label || ''}`;
+      if (!_bufferedEdges.has(edgeId)) {
+        _bufferedEdges.set(edgeId, e);
+      }
+    }
+  }
+
   if (!_cy) return;
 
-  // --- Insert nodes first ---
+  // --- Insert nodes into active Cytoscape instance ---
   const nodesToAdd = [];
   for (const n of nodes) {
     if (!n?.id) continue;
@@ -241,11 +298,14 @@ export function addToGraph({ nodes = [], edges = [] }) {
 }
 
 export function clearGraph() {
-  if (!_cy) return;
+  _bufferedNodes.clear();
+  _bufferedEdges.clear();
   clearTimeout(_layoutTimer);
-  _cy.elements().remove();
   _nodeCount = 0;
   _capFired  = false;
+  if (_cy) {
+    _cy.elements().remove();
+  }
 }
 
 /** Call after the graph panel becomes visible to fix blank-canvas on hidden
@@ -258,6 +318,17 @@ export function resizeGraph() {
   if (!_cy) return;
   _cy.resize();
   if (_cy.nodes().length > 0) _cy.fit(undefined, 24);
+}
+
+export function reLayoutGraph() {
+  if (!_cy || _cy.nodes().length === 0) return;
+  _cy.resize();
+  const name = _detectLayoutName();
+  const opts = name === 'fcose'
+    ? { name: 'fcose', animate: true, animationDuration: 300, randomize: false, quality: 'default', nodeDimensionsIncludeLabels: true, padding: 24 }
+    : { name: 'cose',  animate: true, animationDuration: 300, randomize: false, padding: 24 };
+  try { _cy.layout(opts).run(); } catch (e) {}
+  _cy.fit(undefined, 24);
 }
 
 /** Returns a base64 PNG data URI, or null on failure. */
@@ -286,18 +357,37 @@ export function getNodeRenderedBBox(id) {
 
 /** Returns a plain { nodes, edges } object for JSON export or download. */
 export function exportJson() {
-  if (!_cy) return { nodes: [], edges: [] };
+  if (_cy && _cy.nodes().length > 0) {
+    return {
+      nodes: _cy.nodes().map(n => ({
+        id:    n.id(),
+        type:  n.data('type'),
+        label: n.data('label'),
+        data:  n.data(),
+      })),
+      edges: _cy.edges().map(e => ({
+        source: e.data('source'),
+        target: e.data('target'),
+        label:  e.data('label'),
+      })),
+    };
+  }
   return {
-    nodes: _cy.nodes().map(n => ({
-      id:    n.id(),
-      type:  n.data('type'),
-      label: n.data('label'),
-      data:  n.data(),
+    nodes: Array.from(_bufferedNodes.values()).map(n => ({
+      id:    n.id,
+      type:  n.type,
+      label: n.label,
+      data:  n.data || {},
     })),
-    edges: _cy.edges().map(e => ({
-      source: e.data('source'),
-      target: e.data('target'),
-      label:  e.data('label'),
+    edges: Array.from(_bufferedEdges.values()).map(e => ({
+      source: e.source,
+      target: e.target,
+      label:  e.label || '',
     })),
   };
+}
+
+/** Returns true if there is any active or buffered graph data. */
+export function hasGraphData() {
+  return (_cy && _cy.nodes().length > 0) || _bufferedNodes.size > 0;
 }

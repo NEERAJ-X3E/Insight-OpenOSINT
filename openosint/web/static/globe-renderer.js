@@ -70,9 +70,10 @@ function _loadScript(src) {
 
 /** Loads the vendored MapLibre JS + CSS exactly once. Safe to call repeatedly. */
 export function loadMapLibre() {
+  if (typeof window !== 'undefined' && window.maplibregl) return Promise.resolve();
   if (_loadPromise) return _loadPromise;
   _loadCss(MAPLIBRE_CSS);
-  _loadPromise = window.maplibregl ? Promise.resolve() : _loadScript(MAPLIBRE_JS);
+  _loadPromise = _loadScript(MAPLIBRE_JS);
   return _loadPromise;
 }
 
@@ -217,6 +218,23 @@ export async function onEnterGlobe(containerEl) {
   await initGlobe(containerEl);
   resizeGlobe();
   _tryFit();
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      resizeGlobe();
+      _tryFit();
+    });
+  }
+  setTimeout(() => {
+    resizeGlobe();
+    _tryFit();
+  }, 100);
+}
+
+export function resetGlobeCamera() {
+  if (!_map) return;
+  try {
+    _map.easeTo({ center: [0, 20], zoom: 1.5, duration: 1000 });
+  } catch (e) {}
 }
 
 function _syncSources() {
@@ -371,7 +389,8 @@ export function flyTo({ center, zoom, bearing = 0, pitch = 0, duration = 2000 } 
  * GDELT/finding points stay usable underneath regardless. */
 function _wireTileFailureTracking() {
   _map.on('error', (e) => {
-    if (e.sourceId && e.sourceId !== 'basemap') return;
+    const isBasemap = e?.sourceId === 'basemap' || (e?.error?.status && e?.error?.url?.includes('/api/tiles'));
+    if (!isBasemap) return;
     _tileFailStreak++;
     if (_tileFailStreak === TILE_FAIL_THRESHOLD && typeof _basemapUnavailableCallback === 'function') {
       _basemapUnavailableCallback(true);
