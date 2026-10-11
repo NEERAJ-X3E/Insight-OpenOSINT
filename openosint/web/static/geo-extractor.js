@@ -144,10 +144,13 @@ export function newsCoverage(toolName, output) {
 /** "last 45 min" / "last 6 h" / "last 1 h 15 min" — plain text for the globe badge. */
 export function coverageLabel(coverage) {
   if (!coverage) return '';
-  const h = Math.floor(coverage.minutes / 60);
-  const m = coverage.minutes % 60;
+  const totalMin = Number.isFinite(coverage.minutes)
+    ? coverage.minutes
+    : (Number.isFinite(coverage.hours) ? coverage.hours * 60 : 0);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
   const span = h ? (m ? `${h} h ${m} min` : `${h} h`) : `${m} min`;
-  const partial = coverage.minutes < coverage.requested;
+  const partial = Number.isFinite(coverage.requested) && totalMin < coverage.requested;
   let label = `News: last ${span}`;
   if (partial && coverage.loading) label += ' — older articles still loading';
   if (coverage.staleMinutes) label += ` — feed ${coverage.staleMinutes} min behind`;

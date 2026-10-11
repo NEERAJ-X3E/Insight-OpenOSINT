@@ -166,7 +166,11 @@ function _style() {
 
 /** Lazy-loads MapLibre (if needed) and creates the map. Idempotent. */
 export async function initGlobe(containerEl) {
-  if (_map) return _map;
+  if (_map) {
+    _map.resize();
+    _tryFit();
+    return _map;
+  }
   await loadMapLibre();
   const maplibregl = window.maplibregl;
   if (!maplibregl) {
@@ -179,23 +183,29 @@ export async function initGlobe(containerEl) {
     style: _style(),
     center: [0, 20],
     zoom: 1.5,
+    projection: { type: 'globe' },
     attributionControl: false,
   });
   _map.addControl(new maplibregl.AttributionControl({ compact: true }));
   _map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+  _wireTileFailureTracking();
 
   // 'load' can fire before this listener attaches (e.g. an inline style
   // with cached tiles resolves almost immediately) — check loaded() first
   // rather than trusting the event to always be in the future.
   const onMapReady = () => {
     _mapReady = true;
+    try {
+      if (typeof _map.setProjection === 'function') {
+        _map.setProjection({ type: 'globe' });
+      }
+    } catch (e) {}
     // The style was built from a snapshot of the buffers; anything that arrived
     // while the map was still loading its style is only in the buffers.
     _syncSources();
     _map.resize();
     _wireBoxSelect();
     _wirePointClicks();
-    _wireTileFailureTracking();
     _map.on('render', () => { _hasRendered = true; });
     _tryFit();
   };
@@ -227,13 +237,17 @@ export async function onEnterGlobe(containerEl) {
   setTimeout(() => {
     resizeGlobe();
     _tryFit();
-  }, 100);
+  }, 80);
+  setTimeout(() => {
+    resizeGlobe();
+    _tryFit();
+  }, 250);
 }
 
 export function resetGlobeCamera() {
   if (!_map) return;
   try {
-    _map.easeTo({ center: [0, 20], zoom: 1.5, duration: 1000 });
+    _map.easeTo({ center: [0, 20], zoom: 1.5, pitch: 0, bearing: 0, duration: 1000 });
   } catch (e) {}
 }
 

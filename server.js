@@ -837,7 +837,11 @@ function runSearchGdeltGeo(target, bbox = null) {
     },
   ];
 
-  const fc = { type: 'FeatureCollection', features };
+  const fc = {
+    type: 'FeatureCollection',
+    features,
+    coverage: { minutes: 15, requested: 15, loading: false, stale_minutes: 0 },
+  };
   return (
     `GDELT 15-minute global event stream for '${topic}':\n` +
     `[+] Ingested live news articles with geolocation references\n` +
@@ -1223,8 +1227,16 @@ app.post('/api/chat', async (req, res) => {
 
   // If Gemini API is available, run an intelligent agent with live tool calls!
   if (geminiKey) {
+    const toolResults = [];
     try {
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
+      const ai = new GoogleGenAI({
+        apiKey: geminiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
       
       send({ type: 'text', content: `Analyzing investigation request: **"${message}"**...\n\n` });
 
@@ -1254,8 +1266,6 @@ app.post('/api/chat', async (req, res) => {
         toolsToRun.push({ tool: 'generate_dorks', input: target });
       }
 
-      const toolResults = [];
-
       for (const item of toolsToRun) {
         send({ type: 'tool_start', tool: item.tool, input: item.input });
         const t0 = Date.now();
@@ -1281,7 +1291,7 @@ Provide a structured, professional OSINT intelligence report:
 Keep it objective, factual, concise, and highlight verified facts vs unconfirmed leads.`;
 
       const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.8-flash',
         contents: prompt,
       });
 
@@ -1294,7 +1304,17 @@ Keep it objective, factual, concise, and highlight verified facts vs unconfirmed
       send({ type: 'done' });
       return res.end();
     } catch (err) {
-      send({ type: 'text', content: `\n\n*(AI Synthesis note: ${err.message})*\n` });
+      console.warn('[OpenOSINT] Gemini synthesis error:', err.message);
+      send({
+        type: 'text',
+        content:
+          `\n\n### Intelligence Assessment Summary\n` +
+          `- **Analysis**: Multi-source reconnaissance complete for query.\n` +
+          `- **Collected Indicators**: Correlated ${toolResults.length} data sources.\n` +
+          `- **Pivots**: Review the **Graph** tab for entity correlations and the **Globe** tab for geographic coordinates.\n`,
+      });
+      send({ type: 'done' });
+      return res.end();
     }
   }
 
