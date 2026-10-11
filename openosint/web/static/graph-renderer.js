@@ -79,9 +79,17 @@ function _scheduleLayout() {
     if (!_cy || _cy.nodes().length === 0) return;
     const name = _detectLayoutName();
     const opts = name === 'fcose'
-      ? { name: 'fcose', animate: true, animationDuration: 300, randomize: false, quality: 'default', nodeDimensionsIncludeLabels: true, padding: 24 }
-      : { name: 'cose',  animate: true, animationDuration: 300, randomize: false, padding: 24 };
-    _cy.layout(opts).run();
+      ? { name: 'fcose', animate: true, animationDuration: 300, randomize: false, quality: 'default', nodeDimensionsIncludeLabels: true, padding: 32 }
+      : { name: 'cose',  animate: true, animationDuration: 300, randomize: false, padding: 32 };
+    try {
+      const layout = _cy.layout(opts);
+      layout.on('layoutstop', () => {
+        if (_cy && _cy.nodes().length > 0) _cy.fit(undefined, 32);
+      });
+      layout.run();
+    } catch {
+      _cy.fit(undefined, 32);
+    }
   }, LAYOUT_DEBOUNCE_MS);
 }
 
@@ -325,10 +333,17 @@ export function reLayoutGraph() {
   _cy.resize();
   const name = _detectLayoutName();
   const opts = name === 'fcose'
-    ? { name: 'fcose', animate: true, animationDuration: 300, randomize: false, quality: 'default', nodeDimensionsIncludeLabels: true, padding: 24 }
-    : { name: 'cose',  animate: true, animationDuration: 300, randomize: false, padding: 24 };
-  try { _cy.layout(opts).run(); } catch (e) {}
-  _cy.fit(undefined, 24);
+    ? { name: 'fcose', animate: true, animationDuration: 300, randomize: false, quality: 'default', nodeDimensionsIncludeLabels: true, padding: 32 }
+    : { name: 'cose',  animate: true, animationDuration: 300, randomize: false, padding: 32 };
+  try {
+    const layout = _cy.layout(opts);
+    layout.on('layoutstop', () => {
+      if (_cy && _cy.nodes().length > 0) _cy.fit(undefined, 32);
+    });
+    layout.run();
+  } catch (e) {
+    _cy.fit(undefined, 32);
+  }
 }
 
 /** Returns a base64 PNG data URI, or null on failure. */

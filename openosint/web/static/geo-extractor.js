@@ -12,8 +12,17 @@
  */
 
 function _point(lon, lat, properties = {}) {
-  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
-  return { type: 'Feature', geometry: { type: 'Point', coordinates: [lon, lat] }, properties };
+  let finalLat = parseFloat(lat);
+  let finalLon = parseFloat(lon);
+  if (!Number.isFinite(finalLat) || !Number.isFinite(finalLon)) return null;
+  // Auto-detect accidental lat/lon inversion (lat > 90 cannot be latitude)
+  if (Math.abs(finalLat) > 90 && Math.abs(finalLon) <= 90) {
+    const tmp = finalLat;
+    finalLat = finalLon;
+    finalLon = tmp;
+  }
+  if (finalLat < -90 || finalLat > 90 || finalLon < -180 || finalLon > 180) return null;
+  return { type: 'Feature', geometry: { type: 'Point', coordinates: [finalLon, finalLat] }, properties };
 }
 
 function _val(text, prefixPattern) {
@@ -96,13 +105,49 @@ export function splitGeojsonFence(output) {
  * Never throws — any parse failure returns an empty array.
  */
 export function extractGeoFeatures(toolName, target, output) {
-  const extractor = _REGISTRY[toolName];
-  if (!extractor) return [];
-  try {
-    return extractor(target, output || '') || [];
-  } catch {
-    return [];
+  const text = output || '';
+
+  // 1. If tool result has a fenced geojson block, extract and validate features
+  const m = _GEOJSON_FENCE_RE.exec(text);
+  if (m) {
+    try {
+      const fc = JSON.parse(m[1]);
+      if (Array.isArray(fc.features) && fc.features.length) {
+        const valid = fc.features.filter(f => f?.geometry?.type === 'Point' && Array.isArray(f.geometry.coordinates));
+        if (valid.length) return valid;
+      }
+    } catch {}
   }
+
+  // 2. Specific registered extractor
+  const extractor = _REGISTRY[toolName];
+  if (extractor) {
+    try {
+      const res = extractor(target, text);
+      if (Array.isArray(res) && res.length) return res;
+    } catch {}
+  }
+
+  // 3. Fallback: parse [+] Loc: lat,lon or Coordinates: lat,lon
+  const locMatch = text.match(/\[\+\]\s*(?:Loc|Coordinates?):\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/i)
+    || text.match(/(?:Loc|Coordinates?):\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/i);
+  if (locMatch) {
+    const lat = parseFloat(locMatch[1]);
+    const lon = parseFloat(locMatch[2]);
+    const feat = _point(lon, lat, { tool: toolName, target, name: target });
+    if (feat) return [feat];
+  }
+
+  const latMatch = text.match(/(?:Latitude|\[\+\]\s*Lat):\s*(-?[\d.]+)/i);
+  const lonMatch = text.match(/(?:Longitude|\[\+\]\s*Lon):\s*(-?[\d.]+)/i);
+  if (latMatch && lonMatch) {
+    const lat = parseFloat(latMatch[1]);
+    const lon = parseFloat(lonMatch[1]);
+    const feat = _point(lon, lat, { tool: toolName, target, name: target });
+    if (feat) return [feat];
+  }
+
+  return [];
 }
 
 /**

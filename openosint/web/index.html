@@ -106,11 +106,32 @@
   .md pre { background:var(--surface-dark); border:1px solid var(--border); padding:.65em .9em; border-radius:6px; overflow-x:auto; margin:.4em 0; }
   .md pre code { background:none; border:none; padding:0; font-size:.8em; }
 
-  /* MapLibre's own CSS (loaded lazily, after Tailwind) sets .maplibregl-map
-     to position:relative — same specificity as our .absolute utility class,
-     so it wins the cascade by load order and the container collapses to 0
-     height. An ID selector always outranks it, regardless of load order. */
-  #globe-container, #graph-container { position:absolute; inset:0; width:100% !important; height:100% !important; }
+  /* MapLibre and Cytoscape canvas sizing rules — ensure containers and WebGL canvases
+     always fill 100% of their viewport and never collapse on tab switches. */
+  #globe-container, #graph-container {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 100% !important;
+    min-height: 100% !important;
+    display: block !important;
+  }
+  #globe-container .maplibregl-canvas-container,
+  #globe-container canvas.maplibregl-canvas {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+  #graph-container canvas {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
 
   /* MapLibre controls — theme to the app's surface/border palette so the
      globe doesn't look like a bolted-on third-party widget. */
@@ -746,8 +767,8 @@
     </div>
   </div>
 
-  <div class="flex-1 relative w-full h-full" style="min-height:0;height:calc(100% - 2.25rem);">
-    <div id="globe-container" class="absolute inset-0 w-full h-full" style="position:absolute !important;width:100% !important;height:100% !important;inset:0;"></div>
+  <div class="flex-1 relative w-full h-full min-h-0 overflow-hidden">
+    <div id="globe-container" class="absolute inset-0 w-full h-full"></div>
 
     <!-- Consecutive tile-failure notice -->
     <div x-show="basemapUnavailable" x-cloak
@@ -811,8 +832,8 @@
     </div>
   </div>
   <!-- Cytoscape canvas -->
-  <div class="flex-1 relative" style="min-height:0;">
-    <div id="graph-container" class="absolute inset-0"></div>
+  <div class="flex-1 relative w-full h-full min-h-0 overflow-hidden">
+    <div id="graph-container" class="absolute inset-0 w-full h-full"></div>
     <!-- Empty-state hint before any investigation has populated the graph -->
     <div x-show="!hasGraphData" class="absolute inset-0 flex flex-col items-center justify-center p-4 z-10 pointer-events-auto">
       <div class="border border-app rounded-lg bg-surface p-5 max-w-sm text-center shadow-lg">
@@ -1280,6 +1301,20 @@ document.addEventListener('alpine:init', () => {
         if (ta) { ta.style.height = 'auto'; ta.style.height = '22px'; }
       });
 
+      // Clear old searched points on the globe for the new question
+      if (window._globeFns) {
+        if (typeof window._globeFns.clearAllGlobeData === 'function') {
+          window._globeFns.clearAllGlobeData();
+        } else {
+          window._globeFns.clearFindings();
+          window._globeFns.setNewsFeatureCollection({ type: 'FeatureCollection', features: [] });
+        }
+      }
+      this.globeUnseen = 0;
+      this.globePivotFeature = null;
+      this.newsCoverage = null;
+      this.newsUnavailable = false;
+
       const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       this.messages.push({ role: 'user', content: text, time: now });
       this.chatHistory.push({ role: 'user', content: text });
@@ -1353,17 +1388,17 @@ document.addEventListener('alpine:init', () => {
             }
           }
           this.scrollToBottom();
-          // Graph: extract entities from tool output and merge into graph.
-          if (window._graphFns && window._extractEntities) {
-            const toolTarget = toolInputMap[evt.tool] || this.currentTarget;
-            if (toolTarget) {
-              const { nodes, edges } = window._extractEntities(evt.tool, toolTarget, evt.output || '');
-              if (nodes.length || edges.length) {
-                window._graphFns.addToGraph({ nodes, edges });
-                if (!this.hasGraphData && nodes.length) this.hasGraphData = true;
-              }
-              this._pushGeoFeatures(evt.tool, toolTarget, evt.output);
+          // Graph & Globe: extract entities and geo features
+          const toolTarget = toolInputMap[evt.tool] || this.currentTarget || evt.input || '';
+          if (window._graphFns && window._extractEntities && toolTarget) {
+            const { nodes, edges } = window._extractEntities(evt.tool, toolTarget, evt.output || '');
+            if (nodes.length || edges.length) {
+              window._graphFns.addToGraph({ nodes, edges });
+              if (!this.hasGraphData && nodes.length) this.hasGraphData = true;
             }
+          }
+          if (toolTarget || evt.output) {
+            this._pushGeoFeatures(evt.tool, toolTarget || 'target', evt.output);
           }
 
         } else if (evt.type === 'key_required') {
@@ -1515,17 +1550,17 @@ document.addEventListener('alpine:init', () => {
                 }
               }
               this.scrollToBottom();
-              // Graph: extract and merge entities.
-              if (window._graphFns && window._extractEntities) {
-                const toolTarget = sseToolInputMap[evt.tool] || this.currentTarget;
-                if (toolTarget) {
-                  const { nodes, edges } = window._extractEntities(evt.tool, toolTarget, evt.output || '');
-                  if (nodes.length || edges.length) {
-                    window._graphFns.addToGraph({ nodes, edges });
-                    if (!this.hasGraphData && nodes.length) this.hasGraphData = true;
-                  }
-                  this._pushGeoFeatures(evt.tool, toolTarget, evt.output);
+              // Graph & Globe: extract entities and geo features
+              const toolTarget = sseToolInputMap[evt.tool] || this.currentTarget || evt.input || '';
+              if (window._graphFns && window._extractEntities && toolTarget) {
+                const { nodes, edges } = window._extractEntities(evt.tool, toolTarget, evt.output || '');
+                if (nodes.length || edges.length) {
+                  window._graphFns.addToGraph({ nodes, edges });
+                  if (!this.hasGraphData && nodes.length) this.hasGraphData = true;
                 }
+              }
+              if (toolTarget || evt.output) {
+                this._pushGeoFeatures(evt.tool, toolTarget || 'target', evt.output);
               }
 
             } else if (evt.type === 'done') {
@@ -1611,8 +1646,12 @@ document.addEventListener('alpine:init', () => {
       this.globeUnseen = 0;
       if (window._graphFns) window._graphFns.clearGraph();
       if (window._globeFns) {
-        window._globeFns.clearFindings();
-        window._globeFns.setNewsFeatureCollection({ type: 'FeatureCollection', features: [] });
+        if (typeof window._globeFns.clearAllGlobeData === 'function') {
+          window._globeFns.clearAllGlobeData();
+        } else {
+          window._globeFns.clearFindings();
+          window._globeFns.setNewsFeatureCollection({ type: 'FeatureCollection', features: [] });
+        }
       }
     },
 
@@ -1883,9 +1922,11 @@ document.addEventListener('alpine:init', () => {
           window._globeFns.onEnterGlobe(el);
           setTimeout(() => {
             window._globeFns?.resizeGlobe?.();
-            const counts = window._globeFns?.getFeatureCounts?.();
-            if (counts && counts.news === 0 && counts.findings === 0) {
-              this.loadSampleGlobe();
+            const findings = window._globeFns.getFindingsFeatures?.() || [];
+            const news = window._globeFns.getNewsFeatures?.() || [];
+            const allFeatures = [...findings, ...news];
+            if (allFeatures.length) {
+              window._globeFns.fitToFeatures(allFeatures);
             }
           }, 120);
         } else {
@@ -1895,6 +1936,12 @@ document.addEventListener('alpine:init', () => {
       this.$nextTick(tryInit);
       setTimeout(() => {
         window._globeFns?.resizeGlobe?.();
+        const findings = window._globeFns?.getFindingsFeatures?.() || [];
+        const news = window._globeFns?.getNewsFeatures?.() || [];
+        const allFeatures = [...findings, ...news];
+        if (allFeatures.length) {
+          window._globeFns.fitToFeatures(allFeatures);
+        }
       }, 100);
       setTimeout(() => {
         window._globeFns?.resizeGlobe?.();
@@ -1917,9 +1964,13 @@ document.addEventListener('alpine:init', () => {
           this.loadSampleGraph();
         } else {
           this.hasGraphData = true;
+          window._graphFns?.reLayoutGraph?.();
           window._graphFns?.resizeGraph?.();
         }
-      }, 80);
+      }, 100);
+      setTimeout(() => {
+        window._graphFns?.resizeGraph?.();
+      }, 300);
     },
 
     loadSampleGraph() {
@@ -2083,7 +2134,7 @@ document.addEventListener('alpine:init', () => {
   import { runAgentLoop } from '/static/agent-loop.js';
   import { makeTargetNode, extractEntities } from '/static/entity-graph.js';
   import { initGraph, addToGraph, clearGraph, resizeGraph, reLayoutGraph, exportPng, exportJson, getNodeRenderedBBox, hasGraphData } from '/static/graph-renderer.js';
-  import { onEnterGlobe, resizeGlobe, resetGlobeCamera, addFinding, clearFindings, setNewsFeatureCollection, fitToFeatures, onBoxSelect, onPointClick, onBasemapUnavailable, isGlobeReady, getFeatureCounts, getNewsFeatures, getFindingsFeatures, pickRenderedPoint, flyTo } from '/static/globe-renderer.js';
+  import { onEnterGlobe, resizeGlobe, resetGlobeCamera, addFinding, clearFindings, clearAllGlobeData, setNewsFeatureCollection, fitToFeatures, onBoxSelect, onPointClick, onBasemapUnavailable, isGlobeReady, getFeatureCounts, getNewsFeatures, getFindingsFeatures, pickRenderedPoint, flyTo } from '/static/globe-renderer.js';
   import { extractGeoFeatures, mergeNewsFeatures, gdeltServiceStatus, newsCoverage, coverageLabel } from '/static/geo-extractor.js';
   import { safeHttpUrl } from '/static/url-safety.js';
   import * as setupClient from '/static/setup-client.js';
@@ -2091,7 +2142,7 @@ document.addEventListener('alpine:init', () => {
   window._makeTargetNode  = makeTargetNode;
   window._extractEntities = extractEntities;
   window._graphFns        = { initGraph, addToGraph, clearGraph, resizeGraph, reLayoutGraph, exportPng, exportJson, getNodeRenderedBBox, hasGraphData };
-  window._globeFns        = { onEnterGlobe, resizeGlobe, resetGlobeCamera, addFinding, clearFindings, setNewsFeatureCollection, fitToFeatures, onBoxSelect, onPointClick, onBasemapUnavailable, isGlobeReady, getFeatureCounts, getNewsFeatures, getFindingsFeatures, pickRenderedPoint, flyTo };
+  window._globeFns        = { onEnterGlobe, resizeGlobe, resetGlobeCamera, addFinding, clearFindings, clearAllGlobeData, setNewsFeatureCollection, fitToFeatures, onBoxSelect, onPointClick, onBasemapUnavailable, isGlobeReady, getFeatureCounts, getNewsFeatures, getFindingsFeatures, pickRenderedPoint, flyTo };
   window._geoFns          = { extractGeoFeatures, mergeNewsFeatures, gdeltServiceStatus, newsCoverage, coverageLabel };
   window._urlSafety       = { safeHttpUrl };
   window._setupClient     = setupClient;

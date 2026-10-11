@@ -218,7 +218,10 @@ export async function initGlobe(containerEl) {
 /** Call after the globe pane becomes visible (fixes a blank canvas from
  * resizing while the container was display:none). */
 export function resizeGlobe() {
-  if (_map) _map.resize();
+  if (_map) {
+    _map.resize();
+    _tryFit();
+  }
 }
 
 /** Rail-button entry point: lazy-inits on first call, just resizes after
@@ -297,8 +300,14 @@ function _tryFit() {
   if (_map.getContainer().offsetParent === null) return; // GLOBE pane hidden
   const plan = _pendingFit;
   _pendingFit = null;
-  if (plan.type === 'bounds') _map.fitBounds(plan.bounds, { padding: 80, maxZoom: 5, duration: 1500 });
-  else _map.easeTo({ center: plan.center, zoom: plan.zoom, duration: 1500 });
+  if (plan.type === 'bounds') {
+    const [[minLon, minLat], [maxLon, maxLat]] = plan.bounds;
+    if (Math.abs(maxLon - minLon) < 1e-4 && Math.abs(maxLat - minLat) < 1e-4) {
+      _map.easeTo({ center: [minLon, minLat], zoom: 4, duration: 1500 });
+    } else {
+      _map.fitBounds(plan.bounds, { padding: 80, maxZoom: 5, duration: 1500 });
+    }
+  } else _map.easeTo({ center: plan.center, zoom: plan.zoom, duration: 1500 });
 }
 
 /** Merge one GeoJSON Point Feature into the agent-findings source. */
@@ -313,6 +322,14 @@ export function clearFindings() {
   _findingsFC = _emptyFC();
   const source = _map?.getSource('agent-findings');
   if (source) source.setData(_findingsFC);
+}
+
+/** Clear all data (findings + news) from the globe and reset camera targets. */
+export function clearAllGlobeData() {
+  _findingsFC = _emptyFC();
+  _newsFC = _emptyFC();
+  _pendingFit = null;
+  _syncSources();
 }
 
 /** Replace the gdelt-news source with a fresh FeatureCollection (from a
